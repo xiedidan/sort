@@ -28,6 +28,7 @@ import glob
 import time
 import argparse
 from filterpy.kalman import KalmanFilter
+from csk_tracker import CSKTracker
 
 @jit
 def iou(bb_test,bb_gt):
@@ -71,6 +72,46 @@ def convert_x_to_bbox(x,score=None):
   else:
     return np.array([x[0]-w/2.,x[1]-h/2.,x[0]+w/2.,x[1]+h/2.,score]).reshape((1,5))
 
+class CSKBoxTracker(object):
+  # static variable
+  count = 0
+
+  def __init__(self, bbox):
+    # tracker states
+    self.time_since_update = 0
+    self.id = CSKBoxTracker.count
+    self.history = []
+    self.hits = 0
+    self.hit_streak = 0
+    self.age = 0
+    self.target_size = [64, 64]
+
+    CSKBoxTracker.count += 1
+
+    # CSK object and parameters
+    z = convert_bbox_to_z(bbox)
+    self.csk = CSKTracker([z[1], z[0]], self.target_size)
+
+  def update(self, bbox):
+    self.time_since_update = 0
+    self.history = []
+    self.hits += 1
+    self.hit_streak += 1
+
+    # TODO : update CSK
+
+  def predict(self):
+    # TODO : CSK predict
+
+    self.age += 1
+    if (self.time_since_update > 0):
+      self.hit_streak = 0
+    self.time_since_update += 1
+
+    # TODO : append result to history
+    self.history.append()
+
+    return self.history[-1]
 
 class KalmanBoxTracker(object):
   """
