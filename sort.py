@@ -84,7 +84,7 @@ class CSKBoxTracker(object):
     self.hits = 0
     self.hit_streak = 0
     self.age = 0
-    self.target_size = [64, 64]
+    self.target_size = [bbox[3] - bbox[1], bbox[2] - bbox[0]]
 
     CSKBoxTracker.count += 1
 
@@ -98,20 +98,38 @@ class CSKBoxTracker(object):
     self.hits += 1
     self.hit_streak += 1
 
-    # TODO : update CSK
+    # TODO : update CSK?
 
-  def predict(self):
-    # TODO : CSK predict
+  def predict(self, image):
+    # CSK predict
+    self.csk.track(image)
 
     self.age += 1
     if (self.time_since_update > 0):
       self.hit_streak = 0
     self.time_since_update += 1
 
-    # TODO : append result to history
-    self.history.append()
+    # append new bbox to history
+    x = np.array([
+      self.csk.position[1],
+      self.csk.position[0],
+      self.csk.target_size[1] * self.csk.target_size[0],
+      self.csk.target_size[1] / self.csk.target_size[0]
+    ]).reshape((4, 1))
+
+    self.history.append(convert_x_to_bbox(x))
 
     return self.history[-1]
+
+  def get_state(self):
+    x = np.array([
+      self.csk.position[1],
+      self.csk.position[0],
+      self.csk.target_size[1] * self.csk.target_size[0],
+      self.csk.target_size[1] / self.csk.target_size[0]
+    ]).reshape((4, 1))
+
+    return convert_x_to_bbox(x)
 
 class KalmanBoxTracker(object):
   """
@@ -223,7 +241,7 @@ class Sort(object):
     self.trackers = []
     self.frame_count = 0
 
-  def update(self,dets):
+  def update(self, dets, image):
     """
     Params:
       dets - a numpy array of detections in the format [[x1,y1,x2,y2,score],[x1,y1,x2,y2,score],...]
@@ -232,12 +250,14 @@ class Sort(object):
 
     NOTE: The number of objects returned may differ from the number of detections provided.
     """
+
     self.frame_count += 1
+
     #get predicted locations from existing trackers.
-    trks = np.zeros((len(self.trackers),5))
+    trks = np.zeros((len(self.trackers), 5))
     to_del = []
     ret = []
-    for t,trk in enumerate(trks):
+    for t, trk in enumerate(trks):
       pos = self.trackers[t].predict()[0]
       trk[:] = [pos[0], pos[1], pos[2], pos[3], 0]
       if(np.any(np.isnan(pos))):
