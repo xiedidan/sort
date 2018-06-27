@@ -135,6 +135,30 @@ class CSKTracker(object):
 
         self.position = initial_position
 
+    def reset(self, position, target_size):
+        self.target_size = target_size
+
+        self.z = None
+        self.response = None
+        self.alphaf = None
+        self.frame = 0
+
+        self.window_size = pylab.floor(self.target_size * (1 + self.padding))
+        self.output_sigma = pylab.sqrt(pylab.prod(self.target_size)) * self.output_sigma_factor
+
+        grid_y = pylab.arange(self.window_size[0]) - pylab.floor(self.window_size[0] / 2)
+        grid_x = pylab.arange(self.window_size[1]) - pylab.floor(self.window_size[1] / 2)
+        rs, cs = pylab.meshgrid(grid_x, grid_y)
+        y = pylab.exp(-0.5 / self.output_sigma**2 * (rs**2 + cs**2))
+        self.yf = pylab.fft2(y)
+
+        self.cos_window = pylab.outer(
+            pylab.hanning(self.window_size[0]),
+            pylab.hanning(self.window_size[1])
+        )
+
+        self.position = position
+
     def track(self, image):
         if len(image.shape) == 3 and image.shape[2] > 1:
             image = rgb2gray(image)
@@ -170,4 +194,3 @@ class CSKTracker(object):
             f = self.interpolation_factor
             self.alphaf = (1 - f) * self.alphaf + f * new_alphaf
             self.z = (1 - f) * self.z + f * new_z
-

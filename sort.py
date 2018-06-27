@@ -98,7 +98,7 @@ class CSKBoxTracker(object):
     self.hits += 1
     self.hit_streak += 1
 
-    # TODO : update CSK?
+    # TODO : update CSK? No, at least for now
 
   def predict(self, image):
     # CSK predict
@@ -258,7 +258,7 @@ class Sort(object):
     to_del = []
     ret = []
     for t, trk in enumerate(trks):
-      pos = self.trackers[t].predict()[0]
+      pos = self.trackers[t].predict(image)[0]
       trk[:] = [pos[0], pos[1], pos[2], pos[3], 0]
       if(np.any(np.isnan(pos))):
         to_del.append(t)
@@ -275,7 +275,7 @@ class Sort(object):
 
     #create and initialise new trackers for unmatched detections
     for i in unmatched_dets:
-        trk = KalmanBoxTracker(dets[i,:]) 
+        trk = CSKBoxTracker(dets[i,:]) 
         self.trackers.append(trk)
     i = len(self.trackers)
     for trk in reversed(self.trackers):
@@ -334,8 +334,11 @@ if __name__ == '__main__':
           ax1.imshow(im)
           plt.title(seq+' Tracked Targets')
 
+        # read image
+        fn = 'mot_benchmark/%s/%s/img1/%06d.jpg'%(phase,seq,frame)
+        im =io.imread(fn)
         start_time = time.time()
-        trackers = mot_tracker.update(dets)
+        trackers = mot_tracker.update(dets, im)
         cycle_time = time.time() - start_time
         total_time += cycle_time
 
