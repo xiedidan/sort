@@ -112,7 +112,7 @@ class CSKTracker(object):
         self.sigma = 0.2
         self.lambda_value = 1e-2
         self.interpolation_factor = 0.075
-        self.target_size = target_size
+        self.target_size = pylab.array(target_size)
 
         self.z = None
         self.response = None
