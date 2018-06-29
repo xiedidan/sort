@@ -84,15 +84,15 @@ class CSKBoxTracker(object):
     self.hits = 0
     self.hit_streak = 0
     self.age = 0
-    self.target_size = [bbox[3] - bbox[1], bbox[2] - bbox[0]]
+    self.target_size = [(bbox[3] - bbox[1]), (bbox[2] - bbox[0])]
 
     CSKBoxTracker.count += 1
 
     # CSK object and parameters
     z = convert_bbox_to_z(bbox)
-    self.csk = CSKTracker([z[1], z[0]], self.target_size)
+    self.csk = CSKTracker([z[1][0], z[0][0]], self.target_size)
 
-  def update(self, bbox):
+  def update(self):
     self.time_since_update = 0
     self.history = []
     self.hits += 1
@@ -119,6 +119,7 @@ class CSKBoxTracker(object):
 
     self.history.append(convert_x_to_bbox(x))
 
+    print('tracker', self.id, self.csk.position)
     return self.history[-1]
 
   def get_state(self):
@@ -190,7 +191,7 @@ class KalmanBoxTracker(object):
     """
     return convert_x_to_bbox(self.kf.x)
 
-def associate_detections_to_trackers(detections,trackers,iou_threshold = 0.3):
+def associate_detections_to_trackers(detections,trackers,iou_threshold = 0.1):
   """
   Assigns detections to tracked object (both represented as bounding boxes)
 
@@ -266,12 +267,13 @@ class Sort(object):
     for t in reversed(to_del):
       self.trackers.pop(t)
     matched, unmatched_dets, unmatched_trks = associate_detections_to_trackers(dets,trks)
+    # print(len(matched), len(unmatched_dets), len(unmatched_trks))
 
     #update matched trackers with assigned detections
     for t,trk in enumerate(self.trackers):
       if(t not in unmatched_trks):
         d = matched[np.where(matched[:,1]==t)[0],0]
-        trk.update(dets[d,:][0])
+        trk.update()
 
     #create and initialise new trackers for unmatched detections
     for i in unmatched_dets:
@@ -280,7 +282,8 @@ class Sort(object):
     i = len(self.trackers)
     for trk in reversed(self.trackers):
         d = trk.get_state()[0]
-        if((trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits)):
+        # if((trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits)):
+        if (trk.time_since_update < 1):
           ret.append(np.concatenate((d,[trk.id+1])).reshape(1,-1)) # +1 as MOT benchmark requires positive
         i -= 1
         #remove dead tracklet

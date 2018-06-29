@@ -107,7 +107,7 @@ def dense_gauss_kernel(sigma, x, y=None):
 class CSKTracker(object):
     def __init__(self, initial_position, target_size):
         # parameters
-        self.padding = 1.0
+        self.padding = 2.0
         self.output_sigma_factor = 1 / float(16)
         self.sigma = 0.2
         self.lambda_value = 1e-2
@@ -176,6 +176,23 @@ class CSKTracker(object):
             row, col = pylab.unravel_index(r.argmax(), r.shape)
             self.position = self.position - pylab.floor(self.window_size / 2) + [row, col]
 
+            print("frame", self.frame)
+            print("Max response", r.max(), "at", [row, col])
+            
+            pylab.figure()
+            pylab.imshow(self.z)
+            pylab.title("z")
+
+            pylab.figure()
+            pylab.imshow(sub_window)
+            pylab.title("x")
+
+            pylab.figure()
+            pylab.imshow(r)
+            pylab.title("response")
+            pylab.show(block=True)
+            
+
         self.__train_classifier(image)
 
         self.frame += 1
@@ -185,6 +202,7 @@ class CSKTracker(object):
 
         k = dense_gauss_kernel(self.sigma, sub_window)
         new_alphaf = pylab.divide(self.yf, (pylab.fft2(k) + self.lambda_value))
+        pylab.show(block=True)
         new_z = sub_window
 
         if self.frame == 0:
