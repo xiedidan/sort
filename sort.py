@@ -28,7 +28,8 @@ import glob
 import time
 import argparse
 from filterpy.kalman import KalmanFilter
-from csk_tracker import CSKTracker
+import cv2 # (Optional) OpenCV for drawing bounding boxes
+from csk import CSK
 
 @jit
 def iou(bb_test,bb_gt):
@@ -76,7 +77,7 @@ class CSKBoxTracker(object):
   # static variable
   count = 0
 
-  def __init__(self, bbox):
+  def __init__(self, image, bbox):
     # tracker states
     self.time_since_update = 0
     self.id = CSKBoxTracker.count
@@ -84,13 +85,25 @@ class CSKBoxTracker(object):
     self.hits = 0
     self.hit_streak = 0
     self.age = 0
-    self.target_size = [(bbox[3] - bbox[1]), (bbox[2] - bbox[0])]
+    self.target_size = [(bbox[3] - bbox[1]).astype(int), (bbox[2] - bbox[0]).astype(int)]
+    self.position = [(bbox[0] + self.target_size[1] / 2).astype(int), (bbox[1] + self.target_size[0] / 2).astype(int)] # center of bbox, [x, y]
 
     CSKBoxTracker.count += 1
 
     # CSK object and parameters
-    z = convert_bbox_to_z(bbox)
-    self.csk = CSKTracker([z[1][0], z[0][0]], self.target_size)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    self.csk = CSK()
+    self.csk.init(image, bbox[0].astype(int), bbox[1].astype(int), self.target_size[1], self.target_size[0])
+
+  def init(self, image, bbox):
+    # tracker states
+    self.age = 0
+    self.target_size = [(bbox[3] - bbox[1]).astype(int), (bbox[2] - bbox[0]).astype(int)]
+    self.position = [(bbox[0] + self.target_size[1] / 2).astype(int), (bbox[1] + self.target_size[0] / 2).astype(int)] # center of bbox, [x, y]
+
+    # CSK object and parameters
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    self.csk.init(image, bbox[0].astype(int), bbox[1].astype(int), self.target_size[1], self.target_size[0])
 
   def update(self):
     self.time_since_update = 0
@@ -101,8 +114,11 @@ class CSKBoxTracker(object):
     # TODO : update CSK? No, at least for now
 
   def predict(self, image):
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
     # CSK predict
-    self.csk.track(image)
+    x, y = self.csk.update(image)
+    self.position = [(x + self.target_size[1] / 2).astype(int), (y + self.target_size[0] / 2).astype(int)]
 
     self.age += 1
     if (self.time_since_update > 0):
@@ -110,86 +126,27 @@ class CSKBoxTracker(object):
     self.time_since_update += 1
 
     # append new bbox to history
-    x = np.array([
-      self.csk.position[1],
-      self.csk.position[0],
-      self.csk.target_size[1] * self.csk.target_size[0],
-      self.csk.target_size[1] / self.csk.target_size[0]
+    z = np.array([
+      self.position[0],
+      self.position[1],
+      self.target_size[1] * self.target_size[0],
+      self.target_size[1] / self.target_size[0]
     ]).reshape((4, 1))
 
-    self.history.append(convert_x_to_bbox(x))
+    self.history.append(convert_x_to_bbox(z))
 
-    print('tracker', self.id, self.csk.position)
+    print('tracker', self.id, (x, y))
     return self.history[-1]
 
   def get_state(self):
     x = np.array([
-      self.csk.position[1],
-      self.csk.position[0],
-      self.csk.target_size[1] * self.csk.target_size[0],
-      self.csk.target_size[1] / self.csk.target_size[0]
+      self.position[0],
+      self.position[1],
+      self.target_size[1] * self.target_size[0],
+      self.target_size[1] / self.target_size[0]
     ]).reshape((4, 1))
 
     return convert_x_to_bbox(x)
-
-class KalmanBoxTracker(object):
-  """
-  This class represents the internel state of individual tracked objects observed as bbox.
-  """
-  count = 0
-  def __init__(self,bbox):
-    """
-    Initialises a tracker using initial bounding box.
-    """
-    #define constant velocity model
-    self.kf = KalmanFilter(dim_x=7, dim_z=4)
-    self.kf.F = np.array([[1,0,0,0,1,0,0],[0,1,0,0,0,1,0],[0,0,1,0,0,0,1],[0,0,0,1,0,0,0],  [0,0,0,0,1,0,0],[0,0,0,0,0,1,0],[0,0,0,0,0,0,1]])
-    self.kf.H = np.array([[1,0,0,0,0,0,0],[0,1,0,0,0,0,0],[0,0,1,0,0,0,0],[0,0,0,1,0,0,0]])
-
-    self.kf.R[2:,2:] *= 10.
-    self.kf.P[4:,4:] *= 1000. #give high uncertainty to the unobservable initial velocities
-    self.kf.P *= 10.
-    self.kf.Q[-1,-1] *= 0.01
-    self.kf.Q[4:,4:] *= 0.01
-
-    self.kf.x[:4] = convert_bbox_to_z(bbox)
-    self.time_since_update = 0
-    self.id = KalmanBoxTracker.count
-    KalmanBoxTracker.count += 1
-    self.history = []
-    self.hits = 0
-    self.hit_streak = 0
-    self.age = 0
-
-  def update(self,bbox):
-    """
-    Updates the state vector with observed bbox.
-    """
-    self.time_since_update = 0
-    self.history = []
-    self.hits += 1
-    self.hit_streak += 1
-    self.kf.update(convert_bbox_to_z(bbox))
-
-  def predict(self):
-    """
-    Advances the state vector and returns the predicted bounding box estimate.
-    """
-    if((self.kf.x[6]+self.kf.x[2])<=0):
-      self.kf.x[6] *= 0.0
-    self.kf.predict()
-    self.age += 1
-    if(self.time_since_update>0):
-      self.hit_streak = 0
-    self.time_since_update += 1
-    self.history.append(convert_x_to_bbox(self.kf.x))
-    return self.history[-1]
-
-  def get_state(self):
-    """
-    Returns the current bounding box estimate.
-    """
-    return convert_x_to_bbox(self.kf.x)
 
 def associate_detections_to_trackers(detections,trackers,iou_threshold = 0.1):
   """
@@ -230,15 +187,14 @@ def associate_detections_to_trackers(detections,trackers,iou_threshold = 0.1):
 
   return matches, np.array(unmatched_detections), np.array(unmatched_trackers)
 
-
-
 class Sort(object):
-  def __init__(self,max_age=1,min_hits=3):
+  def __init__(self,max_age=1,min_hits=3, refresh_age=10):
     """
     Sets key parameters for SORT
     """
     self.max_age = max_age
     self.min_hits = min_hits
+    self.refresh_age = refresh_age
     self.trackers = []
     self.frame_count = 0
 
@@ -274,10 +230,12 @@ class Sort(object):
       if(t not in unmatched_trks):
         d = matched[np.where(matched[:,1]==t)[0],0]
         trk.update()
+        if (trk.age > self.refresh_age):
+          trk.init(image, dets[d, :][0])
 
     #create and initialise new trackers for unmatched detections
     for i in unmatched_dets:
-        trk = CSKBoxTracker(dets[i,:]) 
+        trk = CSKBoxTracker(image, dets[i, :]) 
         self.trackers.append(trk)
     i = len(self.trackers)
     for trk in reversed(self.trackers):
