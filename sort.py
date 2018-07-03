@@ -135,7 +135,7 @@ class CSKBoxTracker(object):
 
     self.history.append(convert_x_to_bbox(z))
 
-    print('tracker', self.id, (x, y))
+    # print('tracker', self.id, (x, y))
     return self.history[-1]
 
   def get_state(self):
