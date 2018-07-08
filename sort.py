@@ -29,7 +29,7 @@ import time
 import argparse
 from filterpy.kalman import KalmanFilter
 import cv2 # (Optional) OpenCV for drawing bounding boxes
-from csk import CSK
+from StapleWrapper import Staple
 
 @jit
 def iou(bb_test,bb_gt):
@@ -73,37 +73,30 @@ def convert_x_to_bbox(x,score=None):
   else:
     return np.array([x[0]-w/2.,x[1]-h/2.,x[0]+w/2.,x[1]+h/2.,score]).reshape((1,5))
 
-class CSKBoxTracker(object):
+class StapleBoxTracker(object):
   # static variable
   count = 0
 
   def __init__(self, image, bbox):
     # tracker states
     self.time_since_update = 0
-    self.id = CSKBoxTracker.count
+    self.id = StapleBoxTracker.count
     self.history = []
     self.hits = 0
     self.hit_streak = 0
     self.age = 0
-    self.target_size = [(bbox[3] - bbox[1]).astype(int), (bbox[2] - bbox[0]).astype(int)]
-    self.position = [(bbox[0] + self.target_size[1] / 2).astype(int), (bbox[1] + self.target_size[0] / 2).astype(int)] # center of bbox, [x, y]
 
-    CSKBoxTracker.count += 1
+    StapleBoxTracker.count += 1
 
-    # CSK object and parameters
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    self.csk = CSK()
-    self.csk.init(image, bbox[0].astype(int), bbox[1].astype(int), self.target_size[1], self.target_size[0])
+    # staple object and parameters
+    self.staple = Staple()
+    self.staple.init(image, bbox)
+    self.location = bbox
 
   def init(self, image, bbox):
-    # tracker states
     self.age = 0
-    self.target_size = [(bbox[3] - bbox[1]).astype(int), (bbox[2] - bbox[0]).astype(int)]
-    self.position = [(bbox[0] + self.target_size[1] / 2).astype(int), (bbox[1] + self.target_size[0] / 2).astype(int)] # center of bbox, [x, y]
-
-    # CSK object and parameters
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    self.csk.init(image, bbox[0].astype(int), bbox[1].astype(int), self.target_size[1], self.target_size[0])
+    self.staple.init(image, bbox)
+    self.location = bbox
 
   def update(self):
     self.time_since_update = 0
@@ -111,42 +104,21 @@ class CSKBoxTracker(object):
     self.hits += 1
     self.hit_streak += 1
 
-    # TODO : update CSK? No, at least for now
-
   def predict(self, image):
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    location = self.staple.update(image)
 
-    # CSK predict
-    x, y = self.csk.update(image)
-    self.position = [(x + self.target_size[1] / 2).astype(int), (y + self.target_size[0] / 2).astype(int)]
+    self.location = location
+    self.history.append(location)
 
     self.age += 1
     if (self.time_since_update > 0):
       self.hit_streak = 0
     self.time_since_update += 1
 
-    # append new bbox to history
-    z = np.array([
-      self.position[0],
-      self.position[1],
-      self.target_size[1] * self.target_size[0],
-      self.target_size[1] / self.target_size[0]
-    ]).reshape((4, 1))
-
-    self.history.append(convert_x_to_bbox(z))
-
-    # print('tracker', self.id, (x, y))
     return self.history[-1]
 
   def get_state(self):
-    x = np.array([
-      self.position[0],
-      self.position[1],
-      self.target_size[1] * self.target_size[0],
-      self.target_size[1] / self.target_size[0]
-    ]).reshape((4, 1))
-
-    return convert_x_to_bbox(x)
+    return self.location
 
 def associate_detections_to_trackers(detections,trackers,iou_threshold = 0.1):
   """
@@ -215,7 +187,7 @@ class Sort(object):
     to_del = []
     ret = []
     for t, trk in enumerate(trks):
-      pos = self.trackers[t].predict(image)[0]
+      pos = self.trackers[t].predict(image)
       trk[:] = [pos[0], pos[1], pos[2], pos[3], 0]
       if(np.any(np.isnan(pos))):
         to_del.append(t)
@@ -235,11 +207,14 @@ class Sort(object):
 
     #create and initialise new trackers for unmatched detections
     for i in unmatched_dets:
-        trk = CSKBoxTracker(image, dets[i, :]) 
+        trk = StapleBoxTracker(image, dets[i, :]) 
         self.trackers.append(trk)
     i = len(self.trackers)
     for trk in reversed(self.trackers):
-        d = trk.get_state()[0]
+        d = trk.get_state()
+        if (d.size > 4):
+          d = d.take([0, 1, 2, 3])
+
         # if((trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits)):
         if (trk.time_since_update < 1):
           ret.append(np.concatenate((d,[trk.id+1])).reshape(1,-1)) # +1 as MOT benchmark requires positive
@@ -260,7 +235,8 @@ def parse_args():
 
 if __name__ == '__main__':
   # all train
-  sequences = ['PETS09-S2L1','TUD-Campus','TUD-Stadtmitte','ETH-Bahnhof','ETH-Sunnyday','ETH-Pedcross2','KITTI-13','KITTI-17','ADL-Rundle-6','ADL-Rundle-8','Venice-2']
+  #sequences = ['PETS09-S2L1','TUD-Campus','TUD-Stadtmitte','ETH-Bahnhof','ETH-Sunnyday','ETH-Pedcross2','KITTI-13','KITTI-17','ADL-Rundle-6','ADL-Rundle-8','Venice-2']
+  sequences = ['PETS09-S2L1']
   args = parse_args()
   display = args.display
   phase = 'train'
