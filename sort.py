@@ -79,11 +79,8 @@ class StapleBoxTracker(object):
 
   def __init__(self, image, bbox):
     # tracker states
-    self.time_since_update = 0
     self.id = StapleBoxTracker.count
     self.history = []
-    self.hits = 0
-    self.hit_streak = 0
     self.age = 0
 
     StapleBoxTracker.count += 1
@@ -98,27 +95,78 @@ class StapleBoxTracker(object):
     self.staple.init(image, bbox)
     self.location = bbox
 
-  def update(self):
-    self.time_since_update = 0
-    self.history = []
-    self.hits += 1
-    self.hit_streak += 1
-
   def predict(self, image):
     location = self.staple.update(image)
 
     self.location = location
     self.history.append(location)
 
-    self.age += 1
-    if (self.time_since_update > 0):
-      self.hit_streak = 0
-    self.time_since_update += 1
-
     return self.history[-1]
 
   def get_state(self):
     return self.location
+
+  def incr_age(self):
+    self.age += 1
+
+class KalmanBoxTracker(object):
+  """
+  This class represents the internel state of individual tracked objects observed as bbox.
+  """
+  count = 0
+  def __init__(self,bbox):
+    """
+    Initialises a tracker using initial bounding box.
+    """
+    #define constant velocity model
+    self.kf = KalmanFilter(dim_x=7, dim_z=4)
+    self.kf.F = np.array([[1,0,0,0,1,0,0],[0,1,0,0,0,1,0],[0,0,1,0,0,0,1],[0,0,0,1,0,0,0],  [0,0,0,0,1,0,0],[0,0,0,0,0,1,0],[0,0,0,0,0,0,1]])
+    self.kf.H = np.array([[1,0,0,0,0,0,0],[0,1,0,0,0,0,0],[0,0,1,0,0,0,0],[0,0,0,1,0,0,0]])
+
+    self.kf.R[2:,2:] *= 10.
+    self.kf.P[4:,4:] *= 1000. #give high uncertainty to the unobservable initial velocities
+    self.kf.P *= 10.
+    self.kf.Q[-1,-1] *= 0.01
+    self.kf.Q[4:,4:] *= 0.01
+
+    self.kf.x[:4] = convert_bbox_to_z(bbox)
+    self.time_since_update = 0
+    self.id = KalmanBoxTracker.count
+    KalmanBoxTracker.count += 1
+    self.history = []
+    self.hits = 0
+    self.hit_streak = 0
+    self.age = 0
+
+  def update(self,bbox):
+    """
+    Updates the state vector with observed bbox.
+    """
+    self.time_since_update = 0
+    self.history = []
+    self.hits += 1
+    self.hit_streak += 1
+    self.kf.update(convert_bbox_to_z(bbox))
+
+  def predict(self):
+    """
+    Advances the state vector and returns the predicted bounding box estimate.
+    """
+    if((self.kf.x[6]+self.kf.x[2])<=0):
+      self.kf.x[6] *= 0.0
+    self.kf.predict()
+    self.age += 1
+    if(self.time_since_update>0):
+      self.hit_streak = 0
+    self.time_since_update += 1
+    self.history.append(convert_x_to_bbox(self.kf.x))
+    return self.history[-1]
+
+  def get_state(self):
+    """
+    Returns the current bounding box estimate.
+    """
+    return convert_x_to_bbox(self.kf.x)
 
 def associate_detections_to_trackers(detections,trackers,iou_threshold = 0.1):
   """
@@ -170,7 +218,7 @@ class Sort(object):
     self.trackers = []
     self.frame_count = 0
 
-  def update(self, dets, image):
+  def update(self,dets):
     """
     Params:
       dets - a numpy array of detections in the format [[x1,y1,x2,y2,score],[x1,y1,x2,y2,score],...]
@@ -179,15 +227,13 @@ class Sort(object):
 
     NOTE: The number of objects returned may differ from the number of detections provided.
     """
-
     self.frame_count += 1
-
     #get predicted locations from existing trackers.
-    trks = np.zeros((len(self.trackers), 5))
+    trks = np.zeros((len(self.trackers),5))
     to_del = []
     ret = []
-    for t, trk in enumerate(trks):
-      pos = self.trackers[t].predict(image)
+    for t,trk in enumerate(trks):
+      pos = self.trackers[t].predict()[0]
       trk[:] = [pos[0], pos[1], pos[2], pos[3], 0]
       if(np.any(np.isnan(pos))):
         to_del.append(t)
@@ -195,28 +241,21 @@ class Sort(object):
     for t in reversed(to_del):
       self.trackers.pop(t)
     matched, unmatched_dets, unmatched_trks = associate_detections_to_trackers(dets,trks)
-    # print(len(matched), len(unmatched_dets), len(unmatched_trks))
 
     #update matched trackers with assigned detections
     for t,trk in enumerate(self.trackers):
       if(t not in unmatched_trks):
         d = matched[np.where(matched[:,1]==t)[0],0]
-        trk.update()
-        if (trk.age > self.refresh_age):
-          trk.init(image, dets[d, :][0])
+        trk.update(dets[d,:][0])
 
     #create and initialise new trackers for unmatched detections
     for i in unmatched_dets:
-        trk = StapleBoxTracker(image, dets[i, :]) 
+        trk = KalmanBoxTracker(dets[i,:]) 
         self.trackers.append(trk)
     i = len(self.trackers)
     for trk in reversed(self.trackers):
-        d = trk.get_state()
-        if (d.size > 4):
-          d = d.take([0, 1, 2, 3])
-
-        # if((trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits)):
-        if (trk.time_since_update < 1):
+        d = trk.get_state()[0]
+        if((trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits)):
           ret.append(np.concatenate((d,[trk.id+1])).reshape(1,-1)) # +1 as MOT benchmark requires positive
         i -= 1
         #remove dead tracklet
@@ -226,6 +265,53 @@ class Sort(object):
       return np.concatenate(ret)
     return np.empty((0,5))
     
+class TrackerSort(object):
+  def __init__(self, max_age=1):
+    self.max_age = max_age
+    self.trackers = []
+
+  def update(self, im, dets):
+    # get trks
+    trks = np.zeros((len(self.trackers), 5))
+    
+    for t, trk in enumerate(trks):
+      pos = self.trackers[t].get_state()
+      trk[:] = [pos[0], pos[1], pos[2], pos[3], 0]
+      self.trackers[t].incr_age()
+    
+    trks = np.ma.compress_rows(np.ma.masked_invalid(trks))
+
+    # match dets and trks
+    matched, unmatched_dets, unmatched_trks = associate_detections_to_trackers(dets, trks)
+
+    # re-init bbox for matched trackers
+    for t, trk in enumerate(self.trackers):
+      if (t not in unmatched_trks):
+        d = matched[np.where(matched[:, 1] == t)[0], 0]
+        trk.init(im, dets[d, :][0]) # init resets age
+
+    # create new trackers for unmatched dets
+    for i in unmatched_dets:
+      trk = StapleBoxTracker(im, dets[i, :])
+      self.trackers.append(trk)
+
+    # kill unmatched trackers
+    i = len(self.trackers)
+    for trk in reversed(self.trackers):
+      i -= 1
+      if (trk.age == self.max_age):
+        self.trackers.pop(i)
+
+  def get_dets_from_predicts(self, im):
+    trks = np.zeros((len(self.trackers), 5))
+    
+    for t, trk in enumerate(trks):
+      pos = self.trackers[t].predict(im)
+      trk[:] = [pos[0], pos[1], pos[2], pos[3], 0]
+    
+    trks = np.ma.compress_rows(np.ma.masked_invalid(trks))
+    return trks
+
 def parse_args():
     """Parse input arguments."""
     parser = argparse.ArgumentParser(description='SORT demo')
@@ -242,6 +328,7 @@ if __name__ == '__main__':
   phase = 'train'
   total_time = 0.0
   total_frames = 0
+  det_interval = 10
   colours = np.random.rand(32,3) #used only for display
   if(display):
     if not os.path.exists('mot_benchmark'):
@@ -255,14 +342,24 @@ if __name__ == '__main__':
   
   for seq in sequences:
     mot_tracker = Sort() #create instance of the SORT tracker
+    tracker_sort = TrackerSort()
+
     seq_dets = np.loadtxt('data/%s/det.txt'%(seq),delimiter=',') #load detections
     with open('output/%s.txt'%(seq),'w') as out_file:
       print("Processing %s."%(seq))
       for frame in range(int(seq_dets[:,0].max())):
         frame += 1 #detection and frame numbers begin at 1
         dets = seq_dets[seq_dets[:,0]==frame,2:7]
-        dets[:,2:4] += dets[:,0:2] #convert to [x1,y1,w,h] to [x1,y1,x2,y2]
+        dets[:,2:4] += dets[:,0:2] #convert from [x1,y1,w,h] to [x1,y1,x2,y2]
         total_frames += 1
+
+        # track
+        fn = 'mot_benchmark/%s/%s/img1/%06d.jpg'%(phase,seq,frame)
+        im = io.imread(fn)
+        if (frame % det_interval == 1):
+          tracker_sort.update(im, dets)
+        else:
+          dets = tracker_sort.get_dets_from_predicts(im)
 
         if(display):
           ax1 = fig.add_subplot(111, aspect='equal')
@@ -271,11 +368,8 @@ if __name__ == '__main__':
           ax1.imshow(im)
           plt.title(seq+' Tracked Targets')
 
-        # read image
-        fn = 'mot_benchmark/%s/%s/img1/%06d.jpg'%(phase,seq,frame)
-        im =io.imread(fn)
         start_time = time.time()
-        trackers = mot_tracker.update(dets, im)
+        trackers = mot_tracker.update(dets)
         cycle_time = time.time() - start_time
         total_time += cycle_time
 
